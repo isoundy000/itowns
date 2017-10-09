@@ -345,6 +345,8 @@ function defer() {
     return deferedPromise;
 }
 
+let initPromise;
+
 /* globals document,window */
 
 /**
@@ -1338,9 +1340,8 @@ function GlobeControls(view, target, radius, options = {}) {
     _handlerMouseMove = onMouseMove.bind(this);
     _handlerMouseUp = onMouseUp.bind(this);
 
-    this.waitSceneLoaded().then(() => {
+    initPromise = this.waitSceneLoaded().then(() => {
         this.updateCameraTransformation();
-        this._view.notifyChange(true, this.camera);
     });
 }
 
@@ -1400,14 +1401,16 @@ GlobeControls.prototype.setRange = function setRange(range, isAnimated) {
  * @return {Promise<void>}
  */
 GlobeControls.prototype.setOrbitalPosition = function setOrbitalPosition(position, isAnimated) {
-    isAnimated = isAnimated === undefined ? this.isAnimationEnabled() : isAnimated;
-    const deltaPhi = position.tilt === undefined ? 0 : position.tilt * Math.PI / 180 - this.getTiltRad();
-    const deltaTheta = position.heading === undefined ? 0 : position.heading * Math.PI / 180 - this.getHeadingRad();
-    const deltaRange = position.range === undefined ? 0 : position.range - this.getRange();
-    return this.moveOrbitalPosition(deltaRange, deltaTheta, deltaPhi, isAnimated).then(() => {
-        this._view.notifyChange(true);
-        return this.waitSceneLoaded().then(() => {
-            this.updateCameraTransformation();
+    return initPromise.then(() => {
+        isAnimated = isAnimated === undefined ? this.isAnimationEnabled() : isAnimated;
+        const deltaPhi = position.tilt === undefined ? 0 : position.tilt * Math.PI / 180 - this.getTiltRad();
+        const deltaTheta = position.heading === undefined ? 0 : position.heading * Math.PI / 180 - this.getHeadingRad();
+        const deltaRange = position.range === undefined ? 0 : position.range - this.getRange();
+        return this.moveOrbitalPosition(deltaRange, deltaTheta, deltaPhi, isAnimated).then(() => {
+            this._view.notifyChange(true);
+            return this.waitSceneLoaded().then(() => {
+                this.updateCameraTransformation();
+            });
         });
     });
 };
@@ -1717,11 +1720,13 @@ GlobeControls.prototype.setScale = function setScale(scale, pitch, isAnimated) {
  * @return {Promise} A promise that resolves when the next 'globe initilazed' event fires.
  */
 GlobeControls.prototype.setCameraTargetGeoPosition = function setCameraTargetGeoPosition(coordinates, isAnimated) {
-    isAnimated = isAnimated === undefined ? this.isAnimationEnabled() : isAnimated;
-    const position = new C.EPSG_4326(coordinates.longitude, coordinates.latitude, 0)
-        .as('EPSG:4978').xyz();
-    position.range = coordinates.range;
-    return this.setCameraTargetPosition(position, isAnimated);
+    return initPromise.then(() => {
+        isAnimated = isAnimated === undefined ? this.isAnimationEnabled() : isAnimated;
+        const position = new C.EPSG_4326(coordinates.longitude, coordinates.latitude, 0)
+            .as('EPSG:4978').xyz();
+        position.range = coordinates.range;
+        return this.setCameraTargetPosition(position, isAnimated);
+    });
 };
 
 /**
