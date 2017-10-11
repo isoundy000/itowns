@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import format from 'string-format';
 import Extent from '../../Geographic/Extent';
-// import Coordinates from '../../Geographic/Coordinates';
+import Coordinates from '../../Geographic/Coordinates';
 import Provider from './Provider';
 import Fetcher from './Fetcher';
 import CacheRessource from './CacheRessource';
@@ -62,7 +62,31 @@ function getMatrix4FromRotation(Rot) {
     return M4;
 }
 
+// todo: trouver une methode moins lourde que 8 appels a Proj4 pour estimer cette transfo
+function getTransfoGeoCentriqueToLocal(cGeocentrique) {
+    var clocal = cGeocentrique.as('EPSG:4326').as('EPSG:2154');
+    var cx = new Coordinates('EPSG:4978', cGeocentrique._values[0] + 1, cGeocentrique._values[1], cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
+    var cy = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1] + 1, cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
+    var cz = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2] + 1).as('EPSG:4326').as('EPSG:2154');
+    var p0geocentrique = new THREE.Vector3().set(cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2]);
+    var p0local = new THREE.Vector3().set(clocal._values[0], clocal._values[1], clocal._values[2]);
+    return new THREE.Matrix4().set(
+        cx._values[0] - clocal._values[0], cy._values[0] - clocal._values[0], cz._values[0] - clocal._values[0], p0local.x,
+        cx._values[1] - clocal._values[1], cy._values[1] - clocal._values[1], cz._values[1] - clocal._values[1], p0local.y,
+        cx._values[2] - clocal._values[2], cy._values[2] - clocal._values[2], cz._values[2] - clocal._values[2], p0local.z,
+        0, 0, 0, 1).multiply(new THREE.Matrix4().makeTranslation(-p0geocentrique.x, -p0geocentrique.y, -p0geocentrique.z));
+}
+
 function updateMatrixMaterial(oiInfo, layer, camera) {
+    var mWorldToLocal = getTransfoGeoCentriqueToLocal(oiInfo.translation);
+    console.log(mWorldToLocal);
+    var cDebugLocal = new Coordinates('EPSG:2154', 651187.63, 6861376.21, 39.43);
+    var vDebugLocal = new THREE.Vector3(cDebugLocal._values[0], cDebugLocal._values[1], cDebugLocal._values[2]);
+    var cDebugWorld = cDebugLocal.as('EPSG:4326').as('EPSG:4978');
+    var vDebugWorld = new THREE.Vector3(cDebugWorld._values[0], cDebugWorld._values[1], cDebugWorld._values[2]);
+    console.log('debug local :', vDebugLocal);
+    console.log('estimation debug local : ', vDebugWorld.clone().applyMatrix4(mWorldToLocal));
+
     for (var i = 0; i < layer.shaderMat.uniforms.mvpp.value.length; ++i) {
         // compute a Matrix4 for the vertexShader
         // this Matrix4 convert position in the Camera View system to position on texture
