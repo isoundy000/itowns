@@ -6,12 +6,11 @@
 import * as THREE from 'three';
 import format from 'string-format';
 import Extent from '../../Geographic/Extent';
-import Coordinates from '../../Geographic/Coordinates';
+// import Coordinates from '../../Geographic/Coordinates';
 import Provider from './Provider';
 import Fetcher from './Fetcher';
 import CacheRessource from './CacheRessource';
 import GeoJSON2Feature from '../../../Renderer/ThreeExtended/GeoJSON2Feature';
-
 
 function OrientedImage_Provider() {
     this.cache = CacheRessource();
@@ -62,52 +61,47 @@ function getMatrix4FromRotation(Rot) {
     return M4;
 }
 
-// todo: trouver une methode moins lourde que 8 appels a Proj4 pour estimer cette transfo
+// function getTransfoGeoCentriqueToLocal(cGeocentrique) {
+//     var clocal = cGeocentrique.as('EPSG:4326').as('EPSG:2154');
+//     var cx = new Coordinates('EPSG:4978', cGeocentrique._values[0] + 1, cGeocentrique._values[1], cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
+//     var cy = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1] + 1, cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
+//     var cz = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2] + 1).as('EPSG:4326').as('EPSG:2154');
+//     var p0geocentrique = new THREE.Vector3().set(cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2]);
+//     return new THREE.Matrix4().set(
+//         cx._values[0] - clocal._values[0], cy._values[0] - clocal._values[0], cz._values[0] - clocal._values[0], 0,
+//         cx._values[1] - clocal._values[1], cy._values[1] - clocal._values[1], cz._values[1] - clocal._values[1], 0,
+//         cx._values[2] - clocal._values[2], cy._values[2] - clocal._values[2], cz._values[2] - clocal._values[2], 0,
+//         0, 0, 0, 1).multiply(new THREE.Matrix4().makeTranslation(-p0geocentrique.x, -p0geocentrique.y, -p0geocentrique.z));
+// }
+
 function getTransfoGeoCentriqueToLocal(cGeocentrique) {
-    var clocal = cGeocentrique.as('EPSG:4326').as('EPSG:2154');
-    var cx = new Coordinates('EPSG:4978', cGeocentrique._values[0] + 1, cGeocentrique._values[1], cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
-    var cy = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1] + 1, cGeocentrique._values[2]).as('EPSG:4326').as('EPSG:2154');
-    var cz = new Coordinates('EPSG:4978', cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2] + 1).as('EPSG:4326').as('EPSG:2154');
-    var p0geocentrique = new THREE.Vector3().set(cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2]);
-    var p0local = new THREE.Vector3().set(clocal._values[0], clocal._values[1], clocal._values[2]);
-    return new THREE.Matrix4().set(
-        cx._values[0] - clocal._values[0], cy._values[0] - clocal._values[0], cz._values[0] - clocal._values[0], p0local.x,
-        cx._values[1] - clocal._values[1], cy._values[1] - clocal._values[1], cz._values[1] - clocal._values[1], p0local.y,
-        cx._values[2] - clocal._values[2], cy._values[2] - clocal._values[2], cz._values[2] - clocal._values[2], p0local.z,
-        0, 0, 0, 1).multiply(new THREE.Matrix4().makeTranslation(-p0geocentrique.x, -p0geocentrique.y, -p0geocentrique.z));
+    var position = new THREE.Vector3().set(cGeocentrique._values[0], cGeocentrique._values[1], cGeocentrique._values[2]);
+    var object = new THREE.Object3D();
+    object.up = THREE.Object3D.DefaultUp;
+    object.position.copy(position);
+    object.lookAt(position.clone().multiplyScalar(1.1));
+    object.updateMatrixWorld();
+    return new THREE.Matrix4().makeRotationFromQuaternion(object.quaternion.clone().inverse()).multiply(new THREE.Matrix4().makeTranslation(-position.x, -position.y, -position.z));
+}
+
+function getTransfoLocalToPano(roll, pitch, heading) {
+    const euler = new THREE.Euler(
+        pitch * Math.PI / 180,
+        roll * Math.PI / 180,
+        heading * Math.PI / 180, 'ZXY');
+    const qLocalToPano = new THREE.Quaternion().setFromEuler(euler);
+    return new THREE.Matrix4().makeRotationFromQuaternion(qLocalToPano);
 }
 
 function updateMatrixMaterial(oiInfo, layer, camera) {
-    var mWorldToLocal = getTransfoGeoCentriqueToLocal(oiInfo.translation);
-    console.log(mWorldToLocal);
-    var cDebugLocal = new Coordinates('EPSG:2154', 651187.63, 6861376.21, 39.43);
-    var vDebugLocal = new THREE.Vector3(cDebugLocal._values[0], cDebugLocal._values[1], cDebugLocal._values[2]);
-    var cDebugWorld = cDebugLocal.as('EPSG:4326').as('EPSG:4978');
-    var vDebugWorld = new THREE.Vector3(cDebugWorld._values[0], cDebugWorld._values[1], cDebugWorld._values[2]);
-    console.log('debug local :', vDebugLocal);
-    console.log('estimation debug local : ', vDebugWorld.clone().applyMatrix4(mWorldToLocal));
+    if (!layer.mLocalToPano) return;
+    // a recalculer a chaque fois que la camera bouge
+    var mCameraToWorld = camera.matrixWorld;
+    var mCameraToPano = layer.mLocalToPano.clone().multiply(layer.mWorldToLocal).multiply(mCameraToWorld);
 
     for (var i = 0; i < layer.shaderMat.uniforms.mvpp.value.length; ++i) {
-        // compute a Matrix4 for the vertexShader
-        // this Matrix4 convert position in the Camera View system to position on texture
-        // CameraView -(mc2w)-> WorldPosition -(mw2p)-> PanoPosition -(mp2t)-> texture Position
-        var mc2w = camera.matrixWorld;
-        // rotation from geocentric to local vertical system
-        const qGeoCentricToLocal = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(oiInfo.translation._values[0], oiInfo.translation._values[1], oiInfo.translation._values[2]).normalize());
-        const euler = new THREE.Euler(
-            oiInfo.pitch * Math.PI / 180,
-            oiInfo.roll * Math.PI / 180,
-            oiInfo.heading * Math.PI / 180 + Math.PI, 'ZXY');
-            // -(oiInfo.heading * Math.PI / 180 - Math.PI * 0.5), 'ZXY');
-        const qLocalToPano = new THREE.Quaternion().setFromEuler(euler);
-        var centerPanoInWorl = new THREE.Vector4(
-            oiInfo.translation._values[0],
-            oiInfo.translation._values[1], oiInfo.translation._values[2],
-            0);
-        var mp2w = (new THREE.Matrix4().makeRotationFromQuaternion(qGeoCentricToLocal.multiply(qLocalToPano))).setPosition(centerPanoInWorl);
-        var mw2p = new THREE.Matrix4().getInverse(mp2w);
         var mp2t = layer.sensors[i].mp2t.clone();
-        layer.shaderMat.uniforms.mvpp.value[i] = (mp2t.multiply(mw2p)).multiply(mc2w);
+        layer.shaderMat.uniforms.mvpp.value[i] = mp2t.multiply(mCameraToPano);
     }
     // if (layer.view) layer.view.notifyChange(true);
 }
@@ -119,6 +113,27 @@ function updateMaterial(textures, oiInfo, layer, camera) {
         layer.shaderMat.uniforms.texture.value[i] = textures[i].texture;
         if (oldTexture) oldTexture.dispose();
     }
+    layer.mWorldToLocal = getTransfoGeoCentriqueToLocal(oiInfo.translation);
+    layer.mLocalToPano = getTransfoLocalToPano(oiInfo.roll, oiInfo.pitch, oiInfo.heading);
+
+    // Debug
+    // console.log('World to Local', layer.mWorldToLocal);
+    // console.log('Local to pano', layer.mLocalToPano);
+    // console.log(oiInfo.roll, oiInfo.pitch, oiInfo.heading);
+    // var c2154 = oiInfo.translation.as('EPSG:4326').as('EPSG:2154');
+    // var v2154 = new THREE.Vector3(c2154._values[0], c2154._values[1], c2154._values[2]);
+    // var cDebugLocal = new Coordinates('EPSG:2154', 651187.63, 6861376.21, 39.43);
+    // var vDebugLocal = new THREE.Vector3(cDebugLocal._values[0], cDebugLocal._values[1], cDebugLocal._values[2]).sub(v2154);
+    // var cDebugWorld = cDebugLocal.as('EPSG:4326').as('EPSG:4978');
+    // var vDebugWorld = new THREE.Vector3(cDebugWorld._values[0], cDebugWorld._values[1], cDebugWorld._values[2]);
+    // console.log('debug local :', vDebugLocal);
+    // console.log('estimation debug local : ', vDebugWorld.clone().applyMatrix4(layer.mWorldToLocal));
+    // var vDebugPano = new THREE.Vector3().set(0.3220651642644276, 2.8248664455861494, -0.02244088326249085);
+    // console.log('debug pano : ', vDebugPano);
+    // console.log('estimation debug pano : ', vDebugLocal.clone().applyMatrix4(layer.mLocalToPano));
+
+    // Fin Debug
+
     updateMatrixMaterial(oiInfo, layer, camera);
 }
 
@@ -241,12 +256,16 @@ function sensorsInit(res, layer) {
         var sensor = {};
         sensor.id = s.id;
         var rotCamera2Pano = new THREE.Matrix3().fromArray(s.rotation);
+        var rotEspaceImage = new THREE.Matrix3().set(
+            1, 0, 0,
+            0, 1, 0,
+            0, 0, 1);
+        var rotTerrain = new THREE.Matrix3().set(
+            0, -1, 0,
+            1, 0, 0,
+            0, 0, 1);
 
-
-        // var rotEspaceImage = new THREE.Matrix3().set(-1, 0, 0, 0, 1, 0, 0, 0, 1);
-        // var rotTerrain = new THREE.Matrix3().set(0, 1, 0, 1, 0, 0, 0, 0, 1);
-
-        // rotCamera2Pano = rotTerrain.clone().multiply(rotCamera2Pano.clone().multiply(rotEspaceImage));
+        rotCamera2Pano = rotTerrain.clone().multiply(rotCamera2Pano.clone().multiply(rotEspaceImage));
 
         var centerCameraInPano = new THREE.Vector3().fromArray(s.position);
         var transPano2Camera = new THREE.Matrix4().makeTranslation(
