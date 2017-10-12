@@ -112,6 +112,7 @@ function colorFunctionBuildings(layer, node, featureCollection) {
 view.addLayer({
     type: 'geometry',
     update: itowns.FeatureProcessing.update(colorFunctionBuildings),
+    convert: itowns.Feature2Mesh.convertAndExtrude,
     url: 'http://wxs.ign.fr/72hpsel8j8nhb5qgdh07gcyp/geoportail/wfs?',
     protocol: 'wfs',
     version: '2.0.0',

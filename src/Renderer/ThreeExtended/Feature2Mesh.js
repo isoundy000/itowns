@@ -93,6 +93,105 @@ function addFaces(indices, length, offset) {
     }
 }
 
+function coordinateToPoint(coordinates, properties, style) {
+    const geometry = new THREE.BufferGeometry();
+    const vertices = featuresCoordinatesToVertice(coordinates, properties, style);
+    geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+    const result = new THREE.Points(geometry);
+    result.featureVertices = coordinates.featureVertices;
+    return result;
+}
+
+function coordinateToLine(coordinates, properties, style) {
+    const indices = [];
+    const geometry = new THREE.BufferGeometry();
+    const vertices = featuresCoordinatesToVertice(coordinates, properties, style);
+    geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+
+    for (const id in coordinates.featureVertices) {
+        const line = coordinates.featureVertices[id];
+        // TODO optimize indices lines
+        // is the same array each time
+        for (let i = line.offset; i < line.offset + line.count - 1; ++i) {
+            indices.push(i);
+            indices.push(i + 1);
+        }
+    }
+    geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+    const result = new THREE.LineSegments(geometry);
+    result.featureVertices = coordinates.featureVertices;
+    return result;
+}
+
+function coordinateToPolygon(coordinates, properties, style) {
+    const indices = [];
+    let vertices = [];
+    const geometry = new THREE.BufferGeometry();
+    let offset = 0;
+    /* eslint-disable guard-for-in */
+    for (const id in coordinates.featureVertices) {
+        // extract contour coodinates and properties of one feature
+        const { contour, propertie } = extractFeature(coordinates, properties, id);
+        // get altitude and extrude amount from properties
+        const altitudeBottom = style.altitude ? style.altitude(propertie) : 0;
+        const altitudeTopFace = altitudeBottom;
+        // add vertices of the top face
+        const verticesTopFace = coordinatesToVertice(contour, altitudeTopFace);
+        vertices = vertices.concat(verticesTopFace);
+        // triangulate the top face
+        const triangles = Earcut(verticesTopFace, null, 3);
+        for (const indice of triangles) {
+            indices.push(offset + indice);
+        }
+        // increment offset
+        offset += contour.length;
+    }
+    geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+    geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+    const result = new THREE.Mesh(geometry);
+    result.featureVertices = coordinates.featureVertices;
+    return result;
+}
+
+function coordinateToPolygonExtruded(coordinates, properties, style) {
+    const indices = [];
+    let vertices = [];
+    const geometry = new THREE.BufferGeometry();
+    let offset = 0;
+    /* eslint-disable guard-for-in */
+    for (const id in coordinates.featureVertices) {
+        // extract contour coodinates and properties of one feature
+        const { contour, propertie } = extractFeature(coordinates, properties, id);
+        // get altitude and extrude amount from properties
+        const altitudeBottom = style.altitude ? style.altitude(propertie) : 0;
+        const extrudeAmount = style.extrude ? style.extrude(propertie) : 0;
+        // altitudeTopFace is the altitude of the visible top face.
+        const altitudeTopFace = altitudeBottom + extrudeAmount;
+        // add vertices of the top face
+        const verticesTopFace = coordinatesToVertice(contour, altitudeTopFace);
+        vertices = vertices.concat(verticesTopFace);
+        // triangulate the top face
+        const triangles = Earcut(verticesTopFace, null, 3);
+        for (const indice of triangles) {
+            indices.push(offset + indice);
+        }
+        // add vertices of the bottom face
+        const verticesBottom = coordinatesToVertice(contour, altitudeBottom);
+        vertices = vertices.concat(verticesBottom);
+        // add indices to make the side faces
+        addFaces(indices, contour.length, offset);
+        // increment offset, there is twice many vertices because polygone is extruded.
+        offset += 2 * contour.length;
+    }
+    geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+    geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
+    const result = new THREE.Mesh(geometry);
+    // store 'isExtrude' in the mesh. Will be used in FeatureProcessing for colorisation.
+    result.isExtruded = true;
+    result.featureVertices = coordinates.featureVertices;
+    return result;
+}
+
 /*
  * Convert all feature coordinates in one mesh.
  *
@@ -108,96 +207,49 @@ function coordinatesToMesh(coordinates, properties, style = {}) {
     if (!coordinates) {
         return;
     }
-    // create geometry
-    const geometry = new THREE.BufferGeometry();
-    const indices = [];
-    let vertices = [];
-    // build indice and instanciate mesh
-    let result;
     switch (coordinates.type) {
         case 'point': {
-            vertices = featuresCoordinatesToVertice(coordinates, properties, style);
-            geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
-            result = new THREE.Points(geometry);
-            break;
+            return coordinateToPoint(coordinates, properties, style);
         }
         case 'linestring': {
-            /* eslint-disable guard-for-in */
-            vertices = featuresCoordinatesToVertice(coordinates, properties, style);
-            geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
-
-            for (const id in coordinates.featureVertices) {
-                const line = coordinates.featureVertices[id];
-                // TODO optimize indices lines
-                // is the same array each time
-                for (let i = line.offset; i < line.offset + line.count - 1; ++i) {
-                    indices.push(i);
-                    indices.push(i + 1);
-                }
-            }
-            geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
-            result = new THREE.LineSegments(geometry);
-            break;
+            return coordinateToLine(coordinates, properties, style);
         }
         case 'polygon': {
-            let offset = 0;
-            /* eslint-disable guard-for-in */
-            for (const id in coordinates.featureVertices) {
-                // extract contour coodinates and properties of one feature
-                const { contour, propertie } = extractFeature(coordinates, properties, id);
-                // get altitude and extrude amount from properties
-                const altitudeBottom = style.altitude ? style.altitude(propertie) : 0;
-                const extrudeAmount = style.extrude ? style.extrude(propertie) : 0;
-                // altitudeTopFace is the altitude of the visible top face.
-                // if the polygon is extruded, it's the roof, if it's not extruded, it's the floor.
-                const altitudeTopFace = style.extrude ? altitudeBottom + extrudeAmount : altitudeBottom;
-                // add vertices of the top face
-                const verticesTopFace = coordinatesToVertice(contour, altitudeTopFace);
-                vertices = vertices.concat(verticesTopFace);
-                // triangulate the top face
-                const triangles = Earcut(verticesTopFace, null, 3);
-                for (const indice of triangles) {
-                    indices.push(offset + indice);
-                }
-                // if we extrude the polygone
-                if (style.extrude) {
-                    // add vertices of the bottom face
-                    const verticesBottom = coordinatesToVertice(contour, altitudeBottom);
-                    vertices = vertices.concat(verticesBottom);
-                    // add indices to make the side faces
-                    addFaces(indices, contour.length, offset);
-                    // increment offset, there is twice many vertices if polygone is extruded.
-                    offset += contour.length;
-                }
-                // increment offset
-                offset += contour.length;
-            }
-            geometry.addAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
-            geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(indices), 1));
-            result = new THREE.Mesh(geometry);
-
-            // store 'isExtrude' in the mesh. Will be used in FeatureProcessing for colorisation.
-            result.isExtruded = style.extrude;
-            break;
+            return coordinateToPolygon(coordinates, properties, style);
         }
         default:
-
     }
-    result.featureVertices = coordinates.featureVertices;
-    return result;
 }
 
-function featureToThree(feature, style) {
-    const mesh = coordinatesToMesh(feature.geometry, feature.properties, style);
+function coordinatesToMeshExtruded(coordinates, properties, style = {}) {
+    if (!coordinates) {
+        return;
+    }
+    switch (coordinates.type) {
+        case 'point': {
+            return coordinateToPoint(coordinates, properties, style);
+        }
+        case 'linestring': {
+            return coordinateToLine(coordinates, properties, style);
+        }
+        case 'polygon': {
+            return coordinateToPolygonExtruded(coordinates, properties, style);
+        }
+        default:
+    }
+}
+
+function featureToThree(feature, style, coordinateToMeshFunc) {
+    const mesh = coordinateToMeshFunc(feature.geometry, feature.properties, style);
     mesh.properties = feature.properties;
     return mesh;
 }
 
-function featureCollectionToThree(featureCollection, style) {
+function featureCollectionToThree(featureCollection, style, coordinateToMeshFunc) {
     const group = new THREE.Group();
     for (const geometry of featureCollection.geometries) {
         const properties = featureCollection.features;
-        group.add(coordinatesToMesh(geometry, properties, style));
+        group.add(coordinateToMeshFunc(geometry, properties, style));
     }
     group.features = featureCollection.features;
     return group;
@@ -207,7 +259,15 @@ export default {
     convert(feature, style) {
         if (!feature) return;
         if (feature.geometries) {
-            return featureCollectionToThree(feature, style);
+            return featureCollectionToThree(feature, style, coordinatesToMesh);
+        } else {
+            return featureToThree(feature, style);
+        }
+    },
+    convertAndExtrude(feature, style) {
+        if (!feature) return;
+        if (feature.geometries) {
+            return featureCollectionToThree(feature, style, coordinatesToMeshExtruded);
         } else {
             return featureToThree(feature, style);
         }
